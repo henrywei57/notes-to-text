@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notes to Text</title>
+  <meta name="description" content="Turn photos and screenshots of lecture notes into clean, editable bullet-point text.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f5bea'/%3E%3Ccircle cx='9' cy='11' r='2' fill='white'/%3E%3Ccircle cx='9' cy='21' r='2' fill='white'/%3E%3Crect x='14' y='9.5' width='11' height='3' rx='1.5' fill='white'/%3E%3Crect x='14' y='19.5' width='8' height='3' rx='1.5' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7"/><circle cx="9" cy="11" r="2"/><circle cx="9" cy="21" r="2"/><rect x="14" y="9.5" width="11" height="3" rx="1.5"/><rect x="14" y="19.5" width="8" height="3" rx="1.5"/></svg>
+      Notes to Text
+    </a>
+    <a class="gh" href="https://github.com/henrywei57/notes-to-text">GitHub</a>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>Lecture notes in, clean text out.</h1>
+      <p>Drop in slides, screenshots, or photos of your notes. Bullet points come back as editable Markdown you can paste anywhere.</p>
+    </section>
+
+    <section class="card settings" aria-label="Settings">
+      <div class="engine" role="radiogroup" aria-label="OCR engine">
+        <label class="engine-opt">
+          <input type="radio" name="engine" value="local" checked>
+          <span>
+            <strong>On-device</strong>
+            <small>Free and private. Best for slides and typed notes.</small>
+          </span>
+        </label>
+        <label class="engine-opt">
+          <input type="radio" name="engine" value="claude">
+          <span>
+            <strong>Claude</strong>
+            <small>Uses your API key. Much better on handwriting.</small>
+          </span>
+        </label>
+      </div>
+
+      <div class="opts" data-for="local">
+        <label class="field">
+          <span>Language</span>
+          <select id="lang">
+            <option value="eng">English</option>
+            <option value="spa">Spanish</option>
+            <option value="fra">French</option>
+            <option value="deu">German</option>
+            <option value="por">Portuguese</option>
+            <option value="ita">Italian</option>
+            <option value="chi_sim">Chinese (Simplified)</option>
+            <option value="chi_tra">Chinese (Traditional)</option>
+            <option value="jpn">Japanese</option>
+            <option value="kor">Korean</option>
+          </select>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="enhance">
+          <span>Clean up photo <small>(helps with shadows and uneven lighting)</small></span>
+        </label>
+      </div>
+
+      <div class="opts" data-for="claude" hidden>
+        <label class="field grow">
+          <span>Anthropic API key</span>
+          <input type="password" id="api-key" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="field">
+          <span>Model</span>
+          <select id="model"></select>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="remember-key">
+          <span>Remember key on this device</span>
+        </label>
+        <p class="hint">Your key goes straight from this page to <code>api.anthropic.com</code>. It's never sent anywhere else. Get one at <a href="https://console.anthropic.com/settings/keys">console.anthropic.com</a>.</p>
+      </div>
+    </section>
+
+    <label class="dropzone" id="dropzone">
+      <input type="file" id="file-input" accept="image/*" multiple>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <strong>Drop images here, or click to choose</strong>
+      <span>You can also paste a screenshot with <kbd class="paste-key">Ctrl</kbd>+<kbd>V</kbd>. Add as many pages as you like.</span>
+    </label>
+
+    <section class="export card" id="export" hidden>
+      <div class="segmented" role="radiogroup" aria-label="Output format">
+        <label><input type="radio" name="format" value="md" checked><span>Markdown</span></label>
+        <label><input type="radio" name="format" value="txt"><span>Plain text</span></label>
+      </div>
+      <div class="export-actions">
+        <button type="button" class="btn" id="copy-all">Copy all</button>
+        <button type="button" class="btn primary" id="download-all">Download</button>
+        <button type="button" class="btn ghost" id="clear-all">Clear</button>
+      </div>
+    </section>
+
+    <section class="pages" id="pages" aria-live="polite"></section>
+  </main>
+
+  <footer>
+    <p>On-device mode runs <a href="https://github.com/naptha/tesseract.js">Tesseract.js</a> in your browser, so your images never leave your computer.</p>
+  </footer>
+
+  <dialog id="viewer">
+    <img alt="">
+    <form method="dialog"><button class="btn" aria-label="Close">Close</button></form>
+  </dialog>
+
+  <template id="page-tpl">
+    <article class="page card">
+      <button type="button" class="thumb" title="View full size"><img alt=""></button>
+      <div class="page-body">
+        <div class="page-head">
+          <span class="page-name"></span>
+          <span class="status" data-state="queued">Queued</span>
+        </div>
+        <div class="progress" hidden><div></div></div>
+        <textarea spellcheck="true" placeholder="Text will appear here…"></textarea>
+        <p class="error" hidden></p>
+        <div class="page-actions">
+          <button type="button" class="btn small" data-act="copy">Copy</button>
+          <button type="button" class="btn small" data-act="redo">Redo</button>
+          <button type="button" class="btn small ghost" data-act="remove">Remove</button>
+        </div>
+      </div>
+    </article>
+  </template>
+</body>
+</html>
