@@ -6,6 +6,8 @@ export const CLAUDE_MODELS = [
   { id: 'claude-haiku-5-5', label: 'Haiku 5.5 (cheapest)', fallbacks: false },
 ];
 
+export const modelName = (id) => `Claude ${CLAUDE_MODELS.find((m) => m.id === id)?.label.split(' (')[0] ?? id}`;
+
 let sdkPromise = null;
 function loadSdk() {
   sdkPromise ??= import(SDK_URL)
@@ -70,7 +72,7 @@ export async function generate({ apiKey, model, imageB64, system, prompt, effort
     .filter((b) => b.type === 'text')
     .map((b) => b.text)
     .join('');
-  return { text, truncated: message.stop_reason === 'max_tokens' };
+  return { text, truncated: message.stop_reason === 'max_tokens', model: spec.id };
 }
 
 function describeError(Anthropic, err) {

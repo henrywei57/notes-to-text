@@ -14,7 +14,14 @@ const ENGINES = {
 export async function recognizeAI(bitmap, { engine, apiKey, model, accurate, signal, onStage, onDraft }) {
   const { api, maxLong, maxChars } = ENGINES[engine];
   const imageB64 = toJpegBase64(bitmap, { maxLong, maxChars });
-  const common = { apiKey, model, imageB64, signal, onWait: (s) => onStage(`Rate limited, retrying in ${s}s`) };
+  const common = {
+    apiKey,
+    model,
+    imageB64,
+    signal,
+    onWait: (s) => onStage(`Busy, retrying in ${s}s`),
+    onSwitch: (message) => onStage(message),
+  };
 
   onStage('Reading the page', 0.1);
   const first = await api.generate({
@@ -28,7 +35,8 @@ export async function recognizeAI(bitmap, { engine, apiKey, model, accurate, sig
     },
   });
   const draft = cleanTranscript(first.text);
-  if (!accurate || !draft) return { text: draft, truncated: first.truncated };
+  const usedModel = first.model;
+  if (!accurate || !draft) return { text: draft, truncated: first.truncated, usedModel };
 
   onStage('Double-checking against the image', 0.55);
   const second = await api.generate({
@@ -40,6 +48,6 @@ export async function recognizeAI(bitmap, { engine, apiKey, model, accurate, sig
   });
   const checked = cleanTranscript(second.text);
   // A cut-off check would lose the end of the page, so keep the draft instead.
-  if (!checked || second.truncated) return { text: draft, truncated: first.truncated };
-  return { text: checked, truncated: false };
+  if (!checked || second.truncated) return { text: draft, truncated: first.truncated, usedModel };
+  return { text: checked, truncated: false, usedModel };
 }

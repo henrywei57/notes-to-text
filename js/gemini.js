@@ -1,9 +1,21 @@
 const API = 'https://generativelanguage.googleapis.com/v1beta/models';
 
+// Newest first. Google's busiest model is often overloaded, so the others are
+// there to fall back on.
+const FREE_CHAIN = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'];
+
 export const GEMINI_MODELS = [
-  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash (works on the free tier)' },
-  { id: 'gemini-4-argon', label: 'Gemini 4 Argon (most accurate, paid plan)' },
+  { id: 'auto', label: 'Best free model (skips busy ones)', chain: FREE_CHAIN },
+  { id: 'gemini-4-argon', label: 'Gemini 4 Argon (most accurate, needs billing)', chain: ['gemini-4-argon', ...FREE_CHAIN] },
 ];
+
+const NAMES = {
+  'gemini-4-argon': '4 Argon',
+  'gemini-3.8-flash': '3.8 Flash',
+  'gemini-3.6-flash': '3.6 Flash',
+  'gemini-3.5-flash': '3.5 Flash',
+};
+export const modelName = (id) => `Gemini ${NAMES[id] ?? id}`;
 
 const STOP_REASONS = {
   SAFETY: 'Gemini stopped because of its safety filters.',
@@ -14,9 +26,36 @@ const STOP_REASONS = {
   IMAGE_SAFETY: 'Gemini stopped because of its image safety filters.',
 };
 
-const MAX_ATTEMPTS = 4;
+const MAX_ATTEMPTS = 3;
+// Thinking can delay the first chunk, so only give up after a long silence.
+const SILENCE_MS = 100_000;
+// After a model fails as busy, later requests skip it for a while.
+const SKIP_MS = 3 * 60_000;
+const skipUntil = new Map();
 
-export async function generate({ apiKey, model, imageB64, system, prompt, signal, onText, onWait }) {
+// The model can't serve this request right now; another model might.
+class Unavailable extends Error {}
+
+export async function generate({ model, onWait, onSwitch, ...request }) {
+  const spec = GEMINI_MODELS.find((m) => m.id === model) ?? GEMINI_MODELS[0];
+  const ready = spec.chain.filter((id) => !(skipUntil.get(id) > Date.now()));
+  const order = ready.length ? ready : spec.chain;
+  let lastError;
+  for (const [i, id] of order.entries()) {
+    if (i > 0) onSwitch?.(`${modelName(order[i - 1])} is unavailable, trying ${modelName(id)}`);
+    try {
+      const result = await generateWith(id, request, onWait);
+      return { ...result, model: id };
+    } catch (err) {
+      if (!(err instanceof Unavailable)) throw err;
+      skipUntil.set(id, Date.now() + SKIP_MS);
+      lastError = err;
+    }
+  }
+  throw new Error(lastError.message);
+}
+
+async function generateWith(model, { apiKey, imageB64, system, prompt, signal, onText }, onWait) {
   const body = {
     systemInstruction: { parts: [{ text: system }] },
     contents: [
@@ -33,19 +72,25 @@ export async function generate({ apiKey, model, imageB64, system, prompt, signal
   };
 
   for (let attempt = 1; ; attempt++) {
+    const watchdog = new Watchdog(signal);
     let res;
     try {
       res = await fetch(`${API}/${model}:streamGenerateContent?alt=sse`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify(body),
-        signal,
+        signal: watchdog.signal,
       });
+      if (res.ok) return await readStream(res, onText, watchdog);
     } catch (err) {
       if (signal?.aborted) throw err;
-      throw new Error("Couldn't reach the Gemini API. Check your connection.", { cause: err });
+      if (watchdog.fired) throw new Unavailable(`${modelName(model)} stopped responding.`);
+      if (!res) throw new Error("Couldn't reach the Gemini API. Check your connection.", { cause: err });
+      // Raised while reading the stream: a stop reason or a mid-stream error.
+      throw err;
+    } finally {
+      watchdog.stop();
     }
-    if (res.ok) return readStream(res, onText);
 
     const error = await res.json().catch(() => null);
     // Older models don't know per-image resolution; send the image without it.
@@ -53,18 +98,25 @@ export async function generate({ apiKey, model, imageB64, system, prompt, signal
       delete body.contents[0].parts[0].mediaResolution;
       continue;
     }
+    const message = describeError(res.status, error, model);
+    if (!isRetryable(res.status, error)) {
+      if (isModelProblem(res.status)) throw new Unavailable(message);
+      throw new Error(message);
+    }
+    // An overloaded model rarely recovers within seconds, so move on sooner.
+    if (attempt >= (res.status === 429 ? MAX_ATTEMPTS : 2)) throw new Unavailable(message);
     const wait = retryDelay(res.status, error, attempt);
-    if (wait == null || attempt >= MAX_ATTEMPTS) throw new Error(describeError(res.status, error, model));
     onWait?.(Math.ceil(wait / 1000));
     await sleep(wait, signal);
   }
 }
 
-async function readStream(res, onText) {
+async function readStream(res, onText, watchdog) {
   let text = '';
   let finish = null;
   for await (const chunk of sseChunks(res.body)) {
-    if (chunk.error) throw new Error(`Gemini error: ${chunk.error.message}`);
+    watchdog.reset();
+    if (chunk.error) throw new Unavailable(`Gemini error: ${chunk.error.message}`);
     const blocked = chunk.promptFeedback?.blockReason;
     if (blocked) throw new Error(STOP_REASONS[blocked] ?? `Gemini blocked the request (${blocked}).`);
     const candidate = chunk.candidates?.[0];
@@ -76,9 +128,7 @@ async function readStream(res, onText) {
     }
     if (candidate?.finishReason) finish = candidate.finishReason;
   }
-  if (finish && finish !== 'STOP' && finish !== 'MAX_TOKENS' && STOP_REASONS[finish]) {
-    throw new Error(STOP_REASONS[finish]);
-  }
+  if (finish && STOP_REASONS[finish]) throw new Error(STOP_REASONS[finish]);
   return { text, truncated: finish === 'MAX_TOKENS' };
 }
 
@@ -103,37 +153,73 @@ async function* sseChunks(stream) {
   }
 }
 
-// Retry rate limits and server hiccups; everything else is the caller's problem.
-function retryDelay(status, error, attempt) {
-  if (status === 429) {
-    if (isFreeTierBlock(error)) return null;
-    const hint = error?.error?.details?.find((d) => d['@type']?.endsWith('RetryInfo'))?.retryDelay;
-    const seconds = hint ? parseFloat(hint) : 10 * attempt;
-    return seconds <= 90 ? seconds * 1000 + 500 : null;
+// Aborts the request after a long silence, and whenever the caller cancels.
+class Watchdog {
+  constructor(outer) {
+    this.controller = new AbortController();
+    this.signal = this.controller.signal;
+    this.fired = false;
+    this.outer = outer;
+    this.onOuterAbort = () => this.controller.abort(outer.reason);
+    outer?.addEventListener('abort', this.onOuterAbort, { once: true });
+    this.reset();
   }
-  if (status === 500 || status === 503) return 2000 * attempt;
-  return null;
+  reset() {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      this.fired = true;
+      this.controller.abort();
+    }, SILENCE_MS);
+  }
+  stop() {
+    clearTimeout(this.timer);
+    this.outer?.removeEventListener('abort', this.onOuterAbort);
+  }
 }
 
-// A quota of zero means the model isn't offered on this key's tier at all, so waiting won't help.
-function isFreeTierBlock(error) {
-  return /limit: 0\b/.test(error?.error?.message ?? '');
+function quotaMessage(error) {
+  return error?.error?.message ?? '';
+}
+
+function retryInfoSeconds(error) {
+  const hint = error?.error?.details?.find((d) => d['@type']?.endsWith('RetryInfo'))?.retryDelay;
+  return hint ? parseFloat(hint) : null;
+}
+
+// Per-minute rate limits and brief overloads clear up if we wait a little.
+function isRetryable(status, error) {
+  if (status === 429) {
+    if (/limit: 0\b/.test(quotaMessage(error))) return false;
+    const seconds = retryInfoSeconds(error);
+    return seconds == null || seconds <= 90;
+  }
+  return status === 500 || status === 503;
+}
+
+// Problems that another model might not have: not offered to this key, out of
+// quota for the day, or overloaded.
+function isModelProblem(status) {
+  return status === 404 || status === 429 || status >= 500;
+}
+
+function retryDelay(status, error, attempt) {
+  if (status === 429) return ((retryInfoSeconds(error) ?? 10 * attempt) + 0.5) * 1000;
+  return 3000 * attempt;
 }
 
 function describeError(status, error, model) {
-  const message = error?.error?.message ?? '';
+  const message = quotaMessage(error);
   const reasons = (error?.error?.details ?? []).map((d) => d.reason).filter(Boolean);
+  const name = modelName(model);
   if (reasons.includes('API_KEY_INVALID')) return 'Your Gemini API key was rejected. Check that it was copied correctly.';
   if (status === 429) {
-    if (isFreeTierBlock(error)) {
-      return `${model} isn't available on the free tier. Switch to Gemini 3.8 Flash, or turn on billing for your key.`;
-    }
-    return 'You hit the Gemini rate limit. Wait a minute, then press Redo.';
+    if (/limit: 0\b/.test(message)) return `${name} needs billing turned on for your key.`;
+    return `${name} hit your key's usage limit. Wait a bit, then press Redo.`;
   }
   if (status === 403) return "Your API key can't use the Gemini API. Make sure the key is from Google AI Studio.";
-  if (status === 404) return `The model ${model} isn't available for your key. Try the other Gemini model.`;
+  if (status === 404) return `${name} isn't available for your key.`;
   if (status === 400) return `Gemini rejected the request: ${message || 'bad request'}`;
-  if (status >= 500) return 'Gemini is having problems right now. Press Redo to try again.';
+  if (status >= 500) return `${name} is overloaded right now. Press Redo to try again in a minute.`;
   return message || `Gemini request failed (HTTP ${status}).`;
 }
 

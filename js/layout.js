@@ -62,6 +62,8 @@ export function toPlainText(md) {
     .join('\n')
     .replace(/\*\*(.+?)\*\*/g, '$1')
     .replace(/__(.+?)__/g, '$1')
+    // Italic notes like *(margin: ...)* and *[Diagram: ...]*, but not c*g(n).
+    .replace(/(^|\s)\*([([][^*\n]*[)\]])\*/g, '$1$2')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }

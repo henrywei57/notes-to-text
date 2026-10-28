@@ -1,8 +1,8 @@
 import { decodeImage } from './image.js';
 import { recognizeLocal } from './local-ocr.js';
 import { recognizeAI } from './ai-ocr.js';
-import { GEMINI_MODELS } from './gemini.js';
-import { CLAUDE_MODELS } from './claude.js';
+import { GEMINI_MODELS, modelName as geminiName } from './gemini.js';
+import { CLAUDE_MODELS, modelName as claudeName } from './claude.js';
 import { toPlainText } from './layout.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -48,8 +48,8 @@ let pastedCount = 0;
 
 // Each AI engine has its own key, model, and "remember" box.
 const ai = {
-  gemini: { models: GEMINI_MODELS, key: $('#gemini-key'), model: $('#gemini-model'), remember: $('#gemini-remember') },
-  claude: { models: CLAUDE_MODELS, key: $('#claude-key'), model: $('#claude-model'), remember: $('#claude-remember') },
+  gemini: { models: GEMINI_MODELS, name: geminiName, key: $('#gemini-key'), model: $('#gemini-model'), remember: $('#gemini-remember') },
+  claude: { models: CLAUDE_MODELS, name: claudeName, key: $('#claude-key'), model: $('#claude-model'), remember: $('#claude-remember') },
 };
 
 for (const [name, cfg] of Object.entries(ai)) {
@@ -272,6 +272,7 @@ async function run(page, s) {
   try {
     page.bitmap ??= await decodeImage(page.file);
     let text;
+    let doneLabel = 'Done';
     if (ai[s.engine]) {
       const result = await recognizeAI(page.bitmap, {
         engine: s.engine,
@@ -289,6 +290,8 @@ async function run(page, s) {
         },
       });
       text = result.text;
+      // Name the model that did the work, since Gemini may have fallen back to another one.
+      doneLabel = `Done · ${ai[s.engine].name(result.usedModel)}`;
       if (result.truncated) setError(page, 'The response hit the length limit, so the end may be missing.');
     } else {
       text = await recognizeLocal(page.bitmap, {
@@ -303,7 +306,7 @@ async function run(page, s) {
     if (page.removed) return;
     page.textarea.value = text;
     page.status = 'done';
-    setStatus(page, 'done', text ? 'Done' : 'No text found');
+    setStatus(page, 'done', text ? doneLabel : 'No text found');
   } catch (err) {
     if (page.removed) return;
     console.error(err);
