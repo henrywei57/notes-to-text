@@ -1,6 +1,8 @@
 import { decodeImage } from './image.js';
 import { recognizeLocal } from './local-ocr.js';
-import { recognizeClaude, MODELS } from './claude-ocr.js';
+import { recognizeAI } from './ai-ocr.js';
+import { GEMINI_MODELS } from './gemini.js';
+import { CLAUDE_MODELS } from './claude.js';
 import { toPlainText } from './layout.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -29,9 +31,7 @@ const store = {
 const els = {
   lang: $('#lang'),
   enhance: $('#enhance'),
-  apiKey: $('#api-key'),
-  model: $('#model'),
-  rememberKey: $('#remember-key'),
+  accurate: $('#accurate'),
   dropzone: $('#dropzone'),
   fileInput: $('#file-input'),
   pages: $('#pages'),
@@ -46,7 +46,32 @@ let pastedCount = 0;
 
 // Settings
 
-for (const m of MODELS) els.model.add(new Option(m.label, m.id));
+// Each AI engine has its own key, model, and "remember" box.
+const ai = {
+  gemini: { models: GEMINI_MODELS, key: $('#gemini-key'), model: $('#gemini-model'), remember: $('#gemini-remember') },
+  claude: { models: CLAUDE_MODELS, key: $('#claude-key'), model: $('#claude-model'), remember: $('#claude-remember') },
+};
+
+for (const [name, cfg] of Object.entries(ai)) {
+  for (const m of cfg.models) cfg.model.add(new Option(m.label, m.id));
+  cfg.model.value = store.get(`${name}Model`, cfg.models[0].id);
+  if (!cfg.model.value) cfg.model.value = cfg.models[0].id;
+  const saved = store.get(`${name}Key`, '');
+  if (saved) {
+    cfg.key.value = saved;
+    cfg.remember.checked = true;
+  }
+  const saveKey = () => {
+    if (cfg.remember.checked && cfg.key.value.trim()) store.set(`${name}Key`, cfg.key.value.trim());
+    else store.remove(`${name}Key`);
+  };
+  cfg.remember.addEventListener('change', saveKey);
+  cfg.key.addEventListener('input', () => {
+    saveKey();
+    pump();
+  });
+  cfg.model.addEventListener('change', () => store.set(`${name}Model`, cfg.model.value));
+}
 
 function radioValue(name) {
   return document.querySelector(`input[name="${name}"]:checked`).value;
@@ -58,36 +83,33 @@ function setRadio(name, value) {
 }
 
 function settings() {
+  const engine = radioValue('engine');
   return {
-    engine: radioValue('engine'),
+    engine,
     lang: els.lang.value,
     enhance: els.enhance.checked,
-    apiKey: els.apiKey.value.trim(),
-    model: els.model.value,
+    accurate: els.accurate.checked,
+    apiKey: ai[engine]?.key.value.trim() ?? '',
+    model: ai[engine]?.model.value ?? '',
   };
 }
 
 function showEngineOptions() {
   const engine = radioValue('engine');
-  for (const el of document.querySelectorAll('.opts')) el.hidden = el.dataset.for !== engine;
+  for (const el of document.querySelectorAll('.opts')) el.hidden = !el.dataset.for.split(' ').includes(engine);
 }
 
-setRadio('engine', store.get('engine', 'local'));
+// Stored under a new name so returning visitors start on the accurate engine.
+setRadio('engine', store.get('engineChoice', 'gemini'));
 setRadio('format', store.get('format', 'md'));
 els.lang.value = store.get('lang', 'eng');
 els.enhance.checked = store.get('enhance', false);
-els.model.value = store.get('model', MODELS[0].id);
-if (!els.model.value) els.model.value = MODELS[0].id;
-const savedKey = store.get('apiKey', '');
-if (savedKey) {
-  els.apiKey.value = savedKey;
-  els.rememberKey.checked = true;
-}
+els.accurate.checked = store.get('accurate', true);
 showEngineOptions();
 
 for (const input of document.querySelectorAll('input[name="engine"]')) {
   input.addEventListener('change', () => {
-    store.set('engine', radioValue('engine'));
+    store.set('engineChoice', radioValue('engine'));
     showEngineOptions();
     pump();
   });
@@ -97,17 +119,7 @@ for (const input of document.querySelectorAll('input[name="format"]')) {
 }
 els.lang.addEventListener('change', () => store.set('lang', els.lang.value));
 els.enhance.addEventListener('change', () => store.set('enhance', els.enhance.checked));
-els.model.addEventListener('change', () => store.set('model', els.model.value));
-
-function saveKey() {
-  if (els.rememberKey.checked && els.apiKey.value.trim()) store.set('apiKey', els.apiKey.value.trim());
-  else store.remove('apiKey');
-}
-els.rememberKey.addEventListener('change', saveKey);
-els.apiKey.addEventListener('input', () => {
-  saveKey();
-  pump();
-});
+els.accurate.addEventListener('change', () => store.set('accurate', els.accurate.checked));
 
 if (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)) {
   $('.paste-key').textContent = '⌘';
@@ -228,17 +240,21 @@ function setError(page, message) {
   box.textContent = message ?? '';
 }
 
-// Queue: the on-device engine works one page at a time; Claude can take a few at once.
+// Queue: the on-device engine works one page at a time. The AI engines take a
+// couple at once, kept low so free-tier Gemini keys stay under their rate limit.
+
+const CONCURRENCY = { local: 1, gemini: 2, claude: 3 };
 
 function pump() {
   const s = settings();
   const queued = pages.filter((p) => p.status === 'queued');
   if (!queued.length) return;
-  if (s.engine === 'claude' && !s.apiKey) {
+  if (ai[s.engine] && !s.apiKey) {
     for (const p of queued) setStatus(p, 'queued', 'Needs API key');
+    ai[s.engine].key.focus();
     return;
   }
-  const limit = s.engine === 'claude' ? 3 : 1;
+  const limit = CONCURRENCY[s.engine];
   for (const page of queued) {
     if (running >= limit) break;
     run(page, s);
@@ -256,18 +272,20 @@ async function run(page, s) {
   try {
     page.bitmap ??= await decodeImage(page.file);
     let text;
-    if (s.engine === 'claude') {
-      setStatus(page, 'working', 'Sending to Claude');
-      setProgress(page, 0.15);
-      const result = await recognizeClaude(page.bitmap, {
+    if (ai[s.engine]) {
+      const result = await recognizeAI(page.bitmap, {
+        engine: s.engine,
         apiKey: s.apiKey,
         model: s.model,
+        accurate: s.accurate,
         signal: page.controller.signal,
-        onText: (partial) => {
+        onStage: (label, fraction) => {
           if (page.removed) return;
-          page.textarea.value = partial;
-          setStatus(page, 'working', 'Transcribing');
-          setProgress(page, Math.min(0.95, 0.3 + partial.length / 3000));
+          setStatus(page, 'working', label);
+          if (fraction != null) setProgress(page, fraction);
+        },
+        onDraft: (partial) => {
+          if (!page.removed) page.textarea.value = partial;
         },
       });
       text = result.text;

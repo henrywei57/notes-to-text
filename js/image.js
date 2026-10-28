@@ -90,13 +90,13 @@ function adaptiveThreshold(gray, w, h) {
   }
 }
 
-// The API caps images at 5 MB, so step quality and size down until it fits.
-export function toJpegBase64(bitmap) {
-  for (const maxLong of [2400, 1800, 1400]) {
-    const canvas = drawScaled(bitmap, { maxLong });
-    for (const quality of [0.9, 0.8, 0.65]) {
+// APIs cap image size, so step quality and size down until it fits.
+export function toJpegBase64(bitmap, { maxLong, maxChars }) {
+  for (const long of [maxLong, maxLong * 0.75, maxLong * 0.55]) {
+    const canvas = drawScaled(bitmap, { maxLong: long });
+    for (const quality of [0.92, 0.82, 0.7]) {
       const data = canvas.toDataURL('image/jpeg', quality).split(',')[1];
-      if (data.length < 4.8e6) return data;
+      if (data.length < maxChars) return data;
     }
   }
   throw new Error('This image is too large to send, even after shrinking it.');

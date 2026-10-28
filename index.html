@@ -28,22 +28,45 @@
     <section class="card settings" aria-label="Settings">
       <div class="engine" role="radiogroup" aria-label="OCR engine">
         <label class="engine-opt">
-          <input type="radio" name="engine" value="local" checked>
+          <input type="radio" name="engine" value="gemini" checked>
           <span>
-            <strong>On-device</strong>
-            <small>Free and private. Best for slides and typed notes.</small>
+            <strong>Gemini <em>Recommended</em></strong>
+            <small>Most accurate, including handwriting. Free API key from Google.</small>
           </span>
         </label>
         <label class="engine-opt">
           <input type="radio" name="engine" value="claude">
           <span>
             <strong>Claude</strong>
-            <small>Uses your API key. Much better on handwriting.</small>
+            <small>Just as strong on handwriting. Uses your Anthropic API key.</small>
+          </span>
+        </label>
+        <label class="engine-opt">
+          <input type="radio" name="engine" value="local">
+          <span>
+            <strong>Quick scan</strong>
+            <small>No key, runs offline. Only reliable on clean slides.</small>
           </span>
         </label>
       </div>
 
-      <div class="opts" data-for="local">
+      <div class="opts" data-for="gemini">
+        <label class="field grow">
+          <span>Gemini API key</span>
+          <input type="password" id="gemini-key" placeholder="AIza…" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="field">
+          <span>Model</span>
+          <select id="gemini-model"></select>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="gemini-remember">
+          <span>Remember key on this device</span>
+        </label>
+        <p class="hint">Get a free key at <a href="https://aistudio.google.com/apikey">aistudio.google.com/apikey</a>. Your key goes straight from this page to Google and is never sent anywhere else.</p>
+      </div>
+
+      <div class="opts" data-for="local" hidden>
         <label class="field">
           <span>Language</span>
           <select id="lang">
@@ -68,17 +91,24 @@
       <div class="opts" data-for="claude" hidden>
         <label class="field grow">
           <span>Anthropic API key</span>
-          <input type="password" id="api-key" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
+          <input type="password" id="claude-key" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
         </label>
         <label class="field">
           <span>Model</span>
-          <select id="model"></select>
+          <select id="claude-model"></select>
         </label>
         <label class="check">
-          <input type="checkbox" id="remember-key">
+          <input type="checkbox" id="claude-remember">
           <span>Remember key on this device</span>
         </label>
-        <p class="hint">Your key goes straight from this page to <code>api.anthropic.com</code>. It's never sent anywhere else. Get one at <a href="https://console.anthropic.com/settings/keys">console.anthropic.com</a>.</p>
+        <p class="hint">Get a key at <a href="https://console.anthropic.com/settings/keys">console.anthropic.com</a>. Your key goes straight from this page to Anthropic and is never sent anywhere else.</p>
+      </div>
+
+      <div class="opts" data-for="gemini claude">
+        <label class="check">
+          <input type="checkbox" id="accurate" checked>
+          <span>Double-check every page <small>(about twice as slow, catches most misread words)</small></span>
+        </label>
       </div>
     </section>
 
@@ -105,7 +135,7 @@
   </main>
 
   <footer>
-    <p>On-device mode runs <a href="https://github.com/naptha/tesseract.js">Tesseract.js</a> in your browser, so your images never leave your computer.</p>
+    <p>Gemini and Claude modes send each image straight from your browser to that provider. Quick scan runs <a href="https://github.com/naptha/tesseract.js">Tesseract.js</a> in your browser, so those images never leave your computer.</p>
   </footer>
 
   <dialog id="viewer">

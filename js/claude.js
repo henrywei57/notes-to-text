@@ -1,24 +1,10 @@
-import { toJpegBase64 } from './image.js';
-
 const SDK_URL = 'https://esm.sh/@anthropic-ai/sdk@0.133.0';
 
-export const MODELS = [
+export const CLAUDE_MODELS = [
   { id: 'claude-opus-5-5', label: 'Opus 5.5 (most accurate)', fallbacks: true },
   { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5 (faster)', fallbacks: true },
   { id: 'claude-haiku-5-5', label: 'Haiku 5.5 (cheapest)', fallbacks: false },
 ];
-
-const NO_TEXT = '(no text found)';
-
-const SYSTEM = `You transcribe images of lecture notes (slides, screenshots, whiteboards, and handwritten pages) into clean Markdown.
-
-- Transcribe faithfully. Don't summarize, explain, or add anything, and keep the author's wording and abbreviations.
-- Keep the structure: # or ## for titles and section headings, "- " for bullets with two more spaces of indentation per nesting level, "1." for numbered lists, and Markdown tables for tables.
-- Write math as LaTeX between $ signs.
-- For a diagram or figure, transcribe the labels in it, then add a one-line description in italics, like *[Diagram: ...]*.
-- If a word is unreadable, write [illegible] instead of guessing.
-- Reply with the transcription only, with no preamble or closing remarks.
-- If the image has no text at all, reply with exactly: ${NO_TEXT}`;
 
 let sdkPromise = null;
 function loadSdk() {
@@ -32,23 +18,22 @@ function loadSdk() {
   return sdkPromise;
 }
 
-export async function recognizeClaude(bitmap, { apiKey, model, signal, onText }) {
+export async function generate({ apiKey, model, imageB64, system, prompt, effort, signal, onText }) {
   const Anthropic = await loadSdk();
   const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-  const spec = MODELS.find((m) => m.id === model) ?? MODELS[0];
+  const spec = CLAUDE_MODELS.find((m) => m.id === model) ?? CLAUDE_MODELS[0];
 
   const params = {
     model: spec.id,
     max_tokens: 16000,
-    system: SYSTEM,
-    // Transcription doesn't need deep reasoning.
-    output_config: { effort: 'low' },
+    system,
+    output_config: { effort },
     messages: [
       {
         role: 'user',
         content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: toJpegBase64(bitmap) } },
-          { type: 'text', text: 'Transcribe these notes.' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageB64 } },
+          { type: 'text', text: prompt },
         ],
       },
     ],
@@ -69,7 +54,7 @@ export async function recognizeClaude(bitmap, { apiKey, model, signal, onText })
     });
     stream.on('text', (delta) => {
       shown += delta;
-      onText(shown);
+      onText?.(shown);
     });
     message = await stream.finalMessage();
   } catch (err) {
@@ -84,12 +69,8 @@ export async function recognizeClaude(bitmap, { apiKey, model, signal, onText })
     .slice(lastFallback + 1)
     .filter((b) => b.type === 'text')
     .map((b) => b.text)
-    .join('')
-    .trim();
-  return {
-    text: text === NO_TEXT ? '' : text,
-    truncated: message.stop_reason === 'max_tokens',
-  };
+    .join('');
+  return { text, truncated: message.stop_reason === 'max_tokens' };
 }
 
 function describeError(Anthropic, err) {

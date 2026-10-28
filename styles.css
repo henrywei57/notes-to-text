@@ -121,7 +121,7 @@ main, .topbar, footer {
 
 .engine {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 10px;
 }
 
@@ -144,6 +144,18 @@ main, .topbar, footer {
 }
 
 .engine-opt strong { display: block; font-size: 15px; }
+
+.engine-opt em {
+  margin-left: 4px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 600;
+  vertical-align: 1px;
+}
 .engine-opt small { color: var(--muted); font-size: 13px; }
 
 .engine-opt input:checked + span {
@@ -484,8 +496,11 @@ footer {
   font-size: 13px;
 }
 
-@media (max-width: 680px) {
+@media (max-width: 760px) {
   .engine { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 680px) {
   .page { grid-template-columns: 1fr; }
   .thumb img { max-height: 220px; }
   .export { top: 0; border-radius: 0 0 var(--radius) var(--radius); }
