@@ -27,8 +27,10 @@ const STOP_REASONS = {
 };
 
 const MAX_ATTEMPTS = 3;
-// Thinking can delay the first chunk, so only give up after a long silence.
-const SILENCE_MS = 100_000;
+// A busy model can accept a request and then never answer. Thinking delays the
+// first chunk a little, so allow more time for it than between later chunks.
+const FIRST_CHUNK_MS = 45_000;
+const SILENCE_MS = 60_000;
 // After a model fails as busy, later requests skip it for a while.
 const SKIP_MS = 3 * 60_000;
 const skipUntil = new Map();
@@ -115,7 +117,7 @@ async function readStream(res, onText, watchdog) {
   let text = '';
   let finish = null;
   for await (const chunk of sseChunks(res.body)) {
-    watchdog.reset();
+    watchdog.reset(SILENCE_MS);
     if (chunk.error) throw new Unavailable(`Gemini error: ${chunk.error.message}`);
     const blocked = chunk.promptFeedback?.blockReason;
     if (blocked) throw new Error(STOP_REASONS[blocked] ?? `Gemini blocked the request (${blocked}).`);
@@ -162,14 +164,14 @@ class Watchdog {
     this.outer = outer;
     this.onOuterAbort = () => this.controller.abort(outer.reason);
     outer?.addEventListener('abort', this.onOuterAbort, { once: true });
-    this.reset();
+    this.reset(FIRST_CHUNK_MS);
   }
-  reset() {
+  reset(ms) {
     clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.fired = true;
       this.controller.abort();
-    }, SILENCE_MS);
+    }, ms);
   }
   stop() {
     clearTimeout(this.timer);

@@ -201,7 +201,7 @@ function render(items) {
       listLevel = level;
     } else {
       if (out.length) out.push('');
-      out.push(it.type === 'h' ? `${'#'.repeat(it.depth)} ${it.text}` : it.text);
+      out.push(it.text);
       if (it.type === 'h') listLevel = -1;
     }
     prevType = it.type;
